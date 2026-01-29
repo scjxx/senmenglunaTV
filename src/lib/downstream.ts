@@ -368,6 +368,9 @@ function generateNumberVariants(query: string): string[] {
   // 阿拉伯数字到中文数字的映射
   const arabicToChinese = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 
+  // 辅助函数：清理基础名称（去掉末尾标点符号和空格）
+  const cleanBase = (str: string) => str.replace(/[：:；;，,。.！!？?\s]+$/, '').trim();
+
   // 1. 处理"第X季/部/集"格式
   const seasonPattern = /第([一二三四五六七八九十\d]+)(季|部|集|期)/;
   const seasonMatch = seasonPattern.exec(query);
@@ -375,7 +378,7 @@ function generateNumberVariants(query: string): string[] {
     const fullMatch = seasonMatch[0];
     const number = seasonMatch[1];
     const arabicNumber = chineseToArabic[number] || number;
-    const base = query.replace(fullMatch, '').trim();
+    const base = cleanBase(query.replace(fullMatch, ''));
     if (base) {
       variants.push(`${base}${arabicNumber}`);
     }
@@ -420,7 +423,7 @@ function generateNumberVariants(query: string): string[] {
     const suffix = seasonMatch[2];
     if (suffix === '季') {
       const arabicNumber = chineseToArabic[number] || number;
-      const base = query.replace(fullMatch, '').trim();
+      const base = cleanBase(query.replace(fullMatch, ''));
       if (base && !variants.includes(`${base}S${arabicNumber}`)) {
         variants.push(`${base}S${arabicNumber}`);
       }
