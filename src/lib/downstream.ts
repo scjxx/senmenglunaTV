@@ -149,8 +149,10 @@ export async function searchFromApi(
   try {
     const apiBaseUrl = apiSite.api;
 
-    // 智能搜索：使用预计算的变体或即时生成（优化：只生成最有用的变体）
-    const searchVariants = precomputedVariants || generateSearchVariants(query).slice(0, 3);
+    // 智能变体数量：有标点符号时用4个变体，否则用3个
+    const hasSpecialChars = /[：；，。！？、""''（）【】《》:;,.!?"'()\[\]<>]/.test(query);
+    const variantLimit = hasSpecialChars ? 4 : 3;
+    const searchVariants = precomputedVariants || generateSearchVariants(query).slice(0, variantLimit);
     let results: SearchResult[] = [];
     let pageCountFromFirst = 0;
 
@@ -339,8 +341,10 @@ function calculateRelevanceScore(originalQuery: string, variant: string, results
 const M3U8_PATTERN = /(https?:\/\/[^"'\s]+?\.m3u8)/g;
 
 /**
- * 生成数字变体，处理中文数字与阿拉伯数字的转换
+ * 生成数字变体，处理中文数字、罗马数字、阿拉伯数字、S格式的转换
  * 例如："中国奇谭 第二季" -> "中国奇谭2"
+ *       "进击的巨人Ⅱ" -> "进击的巨人2"
+ *       "权力的游戏S2" -> "权力的游戏第二季"
  * @param query 原始查询
  * @returns 数字变体数组
  */
@@ -348,42 +352,83 @@ function generateNumberVariants(query: string): string[] {
   const variants: string[] = [];
 
   // 中文数字到阿拉伯数字的映射
-  const chineseNumbers: { [key: string]: string } = {
+  const chineseToArabic: { [key: string]: string } = {
     '一': '1', '二': '2', '三': '3', '四': '4', '五': '5',
     '六': '6', '七': '7', '八': '8', '九': '9', '十': '10',
   };
 
-  // 1. 处理"第X季/部/集"格式（最常见的情况）
+  // 罗马数字到阿拉伯数字的映射
+  const romanToArabic: { [key: string]: string } = {
+    'Ⅰ': '1', 'Ⅱ': '2', 'Ⅲ': '3', 'Ⅳ': '4', 'Ⅴ': '5',
+    'Ⅵ': '6', 'Ⅶ': '7', 'Ⅷ': '8', 'Ⅸ': '9', 'Ⅹ': '10',
+    'I': '1', 'II': '2', 'III': '3', 'IV': '4', 'V': '5',
+    'VI': '6', 'VII': '7', 'VIII': '8', 'IX': '9', 'X': '10',
+  };
+
+  // 阿拉伯数字到中文数字的映射
+  const arabicToChinese = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+
+  // 1. 处理"第X季/部/集"格式
   const seasonPattern = /第([一二三四五六七八九十\d]+)(季|部|集|期)/;
-  const match = seasonPattern.exec(query);
-
-  if (match) {
-    const fullMatch = match[0];
-    const number = match[1];
-    const arabicNumber = chineseNumbers[number] || number;
+  const seasonMatch = seasonPattern.exec(query);
+  if (seasonMatch) {
+    const fullMatch = seasonMatch[0];
+    const number = seasonMatch[1];
+    const arabicNumber = chineseToArabic[number] || number;
     const base = query.replace(fullMatch, '').trim();
-
     if (base) {
-      // 生成简化格式：无空格，如"中国奇谭2"
       variants.push(`${base}${arabicNumber}`);
     }
   }
 
-  // 2. 处理末尾纯数字（如"中国奇谭2"）-> "中国奇谭 第二季"
+  // 2. 处理末尾纯数字（如"中国奇谭2"）-> "中国奇谭第二季"
   const endNumberMatch = query.match(/^(.+?)\s*(\d+)$/);
   if (endNumberMatch) {
     const base = endNumberMatch[1].trim();
-    const number = endNumberMatch[2];
-    const chineseNum = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][parseInt(number)];
-
-    if (chineseNum && parseInt(number) <= 10) {
-      // 生成中文格式："中国奇谭第二季"
-      variants.push(`${base}第${chineseNum}季`);
+    const number = parseInt(endNumberMatch[2]);
+    if (number >= 1 && number <= 10) {
+      variants.push(`${base}第${arabicToChinese[number]}季`);
     }
   }
 
-  // 限制返回前1个最有可能的变体
-  return variants.slice(0, 1);
+  // 3. 处理罗马数字（如"进击的巨人Ⅱ"）-> "进击的巨人2"
+  const romanPattern = /^(.+?)\s*(Ⅰ|Ⅱ|Ⅲ|Ⅳ|Ⅴ|Ⅵ|Ⅶ|Ⅷ|Ⅸ|Ⅹ|VIII|VII|VI|IV|IX|III|II|I|V|X)$/;
+  const romanMatch = query.match(romanPattern);
+  if (romanMatch) {
+    const base = romanMatch[1].trim();
+    const roman = romanMatch[2];
+    const arabicNumber = romanToArabic[roman];
+    if (base && arabicNumber) {
+      variants.push(`${base}${arabicNumber}`);
+    }
+  }
+
+  // 4. 处理S格式（如"权力的游戏S2"或"权力的游戏S02"）-> "权力的游戏第二季"
+  const sFormatMatch = query.match(/^(.+?)\s*[Ss]0*(\d+)$/);
+  if (sFormatMatch) {
+    const base = sFormatMatch[1].trim();
+    const number = parseInt(sFormatMatch[2]);
+    if (base && number >= 1 && number <= 10) {
+      variants.push(`${base}第${arabicToChinese[number]}季`);
+    }
+  }
+
+  // 5. 反向：从"第X季"生成S格式（如"权力的游戏第二季"-> "权力的游戏S2"）
+  if (seasonMatch) {
+    const fullMatch = seasonMatch[0];
+    const number = seasonMatch[1];
+    const suffix = seasonMatch[2];
+    if (suffix === '季') {
+      const arabicNumber = chineseToArabic[number] || number;
+      const base = query.replace(fullMatch, '').trim();
+      if (base && !variants.includes(`${base}S${arabicNumber}`)) {
+        variants.push(`${base}S${arabicNumber}`);
+      }
+    }
+  }
+
+  // 限制返回前2个最有可能的变体
+  return variants.slice(0, 2);
 }
 
 /**
@@ -398,17 +443,17 @@ export function generateSearchVariants(originalQuery: string): string[] {
   // 1. 原始查询（最高优先级）
   variants.push(trimmed);
 
-  // 2. 处理中文标点符号变体
-  const chinesePunctuationVariants = generateChinesePunctuationVariants(trimmed);
-  chinesePunctuationVariants.forEach(variant => {
+  // 2. 数字变体生成（处理"第二季" <-> "2"转换，优先级高因为采集源命名差异常见）
+  const numberVariants = generateNumberVariants(trimmed);
+  numberVariants.forEach(variant => {
     if (!variants.includes(variant)) {
       variants.push(variant);
     }
   });
 
-  // 3. 数字变体生成（处理"第二季" <-> "2"转换）
-  const numberVariants = generateNumberVariants(trimmed);
-  numberVariants.forEach(variant => {
+  // 3. 处理中文标点符号变体
+  const chinesePunctuationVariants = generateChinesePunctuationVariants(trimmed);
+  chinesePunctuationVariants.forEach(variant => {
     if (!variants.includes(variant)) {
       variants.push(variant);
     }
